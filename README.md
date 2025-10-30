@@ -164,35 +164,18 @@ DEFAULT_REDIRECT = "https://your-site.com" # Where the base URL redirects to
 - `DEFAULT_REDIRECT = "https://your-company.com"` - Redirect to your company homepage  
 - `DEFAULT_REDIRECT = "https://linktr.ee/yourname"` - Redirect to your link tree
 
-## Database Migrations
+## Database Setup
 
-### Fresh Installation
+### Database Migration
 
-For new deployments, use the single migration that creates the complete schema:
+Apply the database schema with a single migration:
 
 ```bash
-# Apply the initial schema (recommended for new installations)
+# Apply the complete schema
 npx wrangler d1 migrations apply go --remote
 ```
 
-This runs `migrations/000_initial_schema.sql` which creates all tables and indexes at once.
-
-### Incremental Migrations
-
-If you're upgrading an existing installation, the incremental migrations are available:
-
-```bash
-# Apply incremental migrations (for existing installations)
-npx wrangler d1 migrations apply go --remote
-```
-
-**Migration Files:**
-- `000_initial_schema.sql` - Complete schema for fresh installations
-- `001_create_links_table.sql` - Links table (legacy)
-- `002_create_analytics_table.sql` - Analytics table (legacy)
-- `003_add_last_clicked_column.sql` - Last clicked tracking
-- `004_add_enhanced_analytics_columns.sql` - Enhanced Cloudflare analytics
-- `005_add_notes_column.sql` - Notes field for links
+This runs `migrations/000_initial_schema.sql` which creates all tables, indexes, and constraints in one step.
 
 ### Database Schema
 
