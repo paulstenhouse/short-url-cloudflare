@@ -1,4 +1,4 @@
-name = "go-links"
+name = "go"
 main = "src/worker.js"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
@@ -6,7 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 # Database configuration
 [[d1_databases]]
 binding = "GO_LINKS"
-database_name = "go-links"
+database_name = "go"
 database_id = "6aa5a33b-4966-4654-b361-8db989597601"
 
 # Environment variables

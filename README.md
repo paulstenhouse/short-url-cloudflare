@@ -8,7 +8,7 @@ A Cloudflare-powered short URL service with D1 database, analytics tracking, and
 
 Skip the setup entirely! Deploy this complete short URL service in seconds:
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/your-username/go-links)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/your-username/go)
 
 ### What happens when you click Deploy:
 
@@ -21,8 +21,8 @@ Skip the setup entirely! Deploy this complete short URL service in seconds:
 **No manual setup required!** No need to install Wrangler, create databases, or configure deployments.
 
 ### After Deployment:
-- **Your Service:** `https://go-links.[your-account].workers.dev`
-- **Admin Panel:** `https://go-links.[your-account].workers.dev/admin?key=demo-admin-key-12345`
+- **Your Service:** `https://go.[your-account].workers.dev`
+- **Admin Panel:** `https://go.[your-account].workers.dev/admin?key=demo-admin-key-12345`
 
 > **Customize After Deployment:**
 > - Change `ADMIN_KEY` to a secure key for production use
@@ -172,7 +172,7 @@ For new deployments, use the single migration that creates the complete schema:
 
 ```bash
 # Apply the initial schema (recommended for new installations)
-npx wrangler d1 migrations apply go-links --remote
+npx wrangler d1 migrations apply go --remote
 ```
 
 This runs `migrations/000_initial_schema.sql` which creates all tables and indexes at once.
@@ -183,7 +183,7 @@ If you're upgrading an existing installation, the incremental migrations are ava
 
 ```bash
 # Apply incremental migrations (for existing installations)
-npx wrangler d1 migrations apply go-links --remote
+npx wrangler d1 migrations apply go --remote
 ```
 
 **Migration Files:**
