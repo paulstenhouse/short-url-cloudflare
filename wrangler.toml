@@ -14,3 +14,8 @@ database_id = "6aa5a33b-4966-4654-b361-8db989597601"
 ADMIN_KEY = "demo-admin-key-12345"
 DEFAULT_REDIRECT = "https://www.example.com"
 DEFAULT_TIMEZONE = "UTC"
+
+# Rate limiting configuration
+RATE_LIMIT_MAX_ATTEMPTS = "10"        # Max failed auth attempts per window
+RATE_LIMIT_WINDOW_MINUTES = "15"     # Time window in minutes
+RATE_LIMIT_BLOCK_DURATION_MINUTES = "60"  # How long to block after exceeding limit
