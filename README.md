@@ -8,7 +8,7 @@ A Cloudflare-powered short URL service with D1 database, analytics tracking, and
 
 Skip the setup entirely! Deploy this complete short URL service in seconds:
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/your-username/go)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/paulstenhouse/short-url-cloudflare)
 
 ### What happens when you click Deploy:
 
