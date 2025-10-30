@@ -164,34 +164,57 @@ DEFAULT_REDIRECT = "https://your-site.com" # Where the base URL redirects to
 - `DEFAULT_REDIRECT = "https://your-company.com"` - Redirect to your company homepage  
 - `DEFAULT_REDIRECT = "https://linktr.ee/yourname"` - Redirect to your link tree
 
-## Database Schema
+## Database Migrations
 
-### Links Table
-```sql
-CREATE TABLE links (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    short_code TEXT UNIQUE NOT NULL,
-    destination_url TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    created_by TEXT DEFAULT 'admin',
-    click_count INTEGER DEFAULT 0
-);
+### Fresh Installation
+
+For new deployments, use the single migration that creates the complete schema:
+
+```bash
+# Apply the initial schema (recommended for new installations)
+npx wrangler d1 migrations apply go-links --remote
 ```
 
-### Analytics Table
-```sql
-CREATE TABLE analytics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    link_id INTEGER NOT NULL,
-    ip_address TEXT,
-    user_agent TEXT,
-    referer TEXT,
-    country TEXT,
-    city TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (link_id) REFERENCES links(id) ON DELETE CASCADE
-);
+This runs `migrations/000_initial_schema.sql` which creates all tables and indexes at once.
+
+### Incremental Migrations
+
+If you're upgrading an existing installation, the incremental migrations are available:
+
+```bash
+# Apply incremental migrations (for existing installations)
+npx wrangler d1 migrations apply go-links --remote
 ```
+
+**Migration Files:**
+- `000_initial_schema.sql` - Complete schema for fresh installations
+- `001_create_links_table.sql` - Links table (legacy)
+- `002_create_analytics_table.sql` - Analytics table (legacy)
+- `003_add_last_clicked_column.sql` - Last clicked tracking
+- `004_add_enhanced_analytics_columns.sql` - Enhanced Cloudflare analytics
+- `005_add_notes_column.sql` - Notes field for links
+
+### Database Schema
+
+The complete schema includes:
+
+**Links Table:**
+- URL storage with short codes
+- Click tracking and timestamps
+- Notes field for context
+- Last clicked tracking
+
+**Analytics Table:**
+- Comprehensive click analytics
+- Cloudflare geo/network data
+- Device and browser detection
+- Bot detection and filtering
+
+**Key Features:**
+- Foreign key constraints for data integrity
+- Optimized indexes for performance
+- Enhanced analytics with 20+ data points
+- Configurable timezone support
 
 ## Development
 
