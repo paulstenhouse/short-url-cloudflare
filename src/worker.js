@@ -31,11 +31,27 @@ export default {
 
     // Link analytics page - /analytics/shortcode?key=adminkey
     if (path.startsWith('/analytics/')) {
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+
+      // Check rate limit
+      const rateLimitCheck = await checkRateLimit(env, ip);
+      if (rateLimitCheck.blocked) {
+        return new Response(
+          `Too many failed attempts. Please try again in ${Math.ceil(rateLimitCheck.retryAfter / 60)} minutes.`,
+          { status: 429 }
+        );
+      }
+
       const shortCode = path.split('/')[2];
       const adminKey = url.searchParams.get('key');
+
       if (adminKey === env.ADMIN_KEY && shortCode) {
+        await clearRateLimit(env, ip);
         return serveLinkAnalytics(shortCode, env);
       }
+
+      // Record failed attempt
+      await recordFailedAttempt(env, ip);
       return new Response('Unauthorized', { status: 401 });
     }
 
@@ -690,12 +706,139 @@ async function serveLinkAnalytics(shortCode, env) {
   }
 }
 
+// Rate limiting functions
+async function checkRateLimit(env, ip) {
+  try {
+    const maxAttempts = parseInt(env.RATE_LIMIT_MAX_ATTEMPTS || '10');
+    const windowMinutes = parseInt(env.RATE_LIMIT_WINDOW_MINUTES || '15');
+    const blockDurationMinutes = parseInt(env.RATE_LIMIT_BLOCK_DURATION_MINUTES || '60');
+
+    // Get rate limit record for this IP
+    const record = await env.GO_LINKS.prepare(
+      'SELECT * FROM rate_limit WHERE ip_address = ?1'
+    ).bind(ip).first();
+
+    if (!record) {
+      return { blocked: false };
+    }
+
+    const now = new Date();
+
+    // Check if IP is currently blocked
+    if (record.blocked_until) {
+      const blockedUntil = new Date(record.blocked_until);
+      if (now < blockedUntil) {
+        const retryAfter = Math.ceil((blockedUntil - now) / 1000); // seconds
+        return { blocked: true, retryAfter };
+      }
+    }
+
+    // Check if we're within the rate limit window
+    const firstAttempt = new Date(record.first_attempt_at);
+    const windowEnd = new Date(firstAttempt.getTime() + windowMinutes * 60 * 1000);
+
+    // If window has expired, allow the request (will be reset on next attempt)
+    if (now > windowEnd) {
+      return { blocked: false };
+    }
+
+    // Check if exceeded max attempts within window
+    if (record.failed_attempts >= maxAttempts) {
+      // Block the IP
+      const blockUntil = new Date(now.getTime() + blockDurationMinutes * 60 * 1000);
+      await env.GO_LINKS.prepare(
+        'UPDATE rate_limit SET blocked_until = ?1 WHERE ip_address = ?2'
+      ).bind(blockUntil.toISOString(), ip).run();
+
+      const retryAfter = blockDurationMinutes * 60;
+      return { blocked: true, retryAfter };
+    }
+
+    return { blocked: false };
+  } catch (error) {
+    console.error('Rate limit check failed:', error);
+    // Fail open - allow request if rate limiting fails
+    return { blocked: false };
+  }
+}
+
+async function recordFailedAttempt(env, ip) {
+  try {
+    const windowMinutes = parseInt(env.RATE_LIMIT_WINDOW_MINUTES || '15');
+    const now = new Date().toISOString();
+
+    // Get existing record
+    const record = await env.GO_LINKS.prepare(
+      'SELECT * FROM rate_limit WHERE ip_address = ?1'
+    ).bind(ip).first();
+
+    if (!record) {
+      // Create new record
+      await env.GO_LINKS.prepare(`
+        INSERT INTO rate_limit (ip_address, failed_attempts, first_attempt_at, last_attempt_at)
+        VALUES (?1, 1, ?2, ?2)
+      `).bind(ip, now).run();
+    } else {
+      const firstAttempt = new Date(record.first_attempt_at);
+      const windowEnd = new Date(firstAttempt.getTime() + windowMinutes * 60 * 1000);
+      const currentTime = new Date();
+
+      if (currentTime > windowEnd) {
+        // Window expired, reset the counter
+        await env.GO_LINKS.prepare(`
+          UPDATE rate_limit
+          SET failed_attempts = 1, first_attempt_at = ?1, last_attempt_at = ?1, blocked_until = NULL
+          WHERE ip_address = ?2
+        `).bind(now, ip).run();
+      } else {
+        // Increment counter within window
+        await env.GO_LINKS.prepare(`
+          UPDATE rate_limit
+          SET failed_attempts = failed_attempts + 1, last_attempt_at = ?1
+          WHERE ip_address = ?2
+        `).bind(now, ip).run();
+      }
+    }
+  } catch (error) {
+    console.error('Failed to record rate limit attempt:', error);
+    // Don't throw - rate limiting failure shouldn't break auth
+  }
+}
+
+async function clearRateLimit(env, ip) {
+  try {
+    // Clear rate limit record on successful authentication
+    await env.GO_LINKS.prepare(
+      'DELETE FROM rate_limit WHERE ip_address = ?1'
+    ).bind(ip).run();
+  } catch (error) {
+    console.error('Failed to clear rate limit:', error);
+    // Don't throw - this is a cleanup operation
+  }
+}
+
 async function handleAdminAPI(request, env, url) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+
+  // Check if IP is rate limited
+  const rateLimitCheck = await checkRateLimit(env, ip);
+  if (rateLimitCheck.blocked) {
+    return jsonResponse({
+      error: 'Too many failed attempts. Please try again later.',
+      retryAfter: rateLimitCheck.retryAfter
+    }, 429);
+  }
+
   const adminKey = url.searchParams.get('key');
-  
+
   if (!adminKey || adminKey !== env.ADMIN_KEY) {
+    // Record failed authentication attempt
+    await recordFailedAttempt(env, ip);
     return jsonResponse({ error: 'Unauthorized' }, 401);
   }
+
+  // Successful authentication - clear rate limit
+  await clearRateLimit(env, ip);
 
   const path = url.pathname;
   const method = request.method;
@@ -784,12 +927,64 @@ async function getLinks(request, env, url) {
   }
 }
 
+function validateDestinationUrl(url) {
+  try {
+    const parsed = new URL(url);
+
+    // Only allow HTTPS protocol (not HTTP, javascript:, file:, data:, etc.)
+    if (parsed.protocol !== 'https:') {
+      return {
+        valid: false,
+        error: `Only HTTPS URLs are allowed. Got: ${parsed.protocol}`
+      };
+    }
+
+    // Additional validation: Check for valid hostname
+    if (!parsed.hostname || parsed.hostname.length === 0) {
+      return {
+        valid: false,
+        error: 'URL must have a valid hostname'
+      };
+    }
+
+    // Reject localhost and private IP ranges for security
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname.startsWith('192.168.') ||
+      hostname.startsWith('10.') ||
+      hostname.startsWith('172.16.') ||
+      hostname.startsWith('169.254.') ||
+      hostname === '[::1]'
+    ) {
+      return {
+        valid: false,
+        error: 'URLs pointing to localhost or private networks are not allowed'
+      };
+    }
+
+    return { valid: true };
+  } catch (error) {
+    return {
+      valid: false,
+      error: 'Invalid URL format'
+    };
+  }
+}
+
 async function createLink(request, env) {
   try {
     const { shortCode, destinationUrl, notes } = await request.json();
-    
+
     if (!shortCode || !destinationUrl) {
       return jsonResponse({ error: 'Short code and destination URL are required' }, 400);
+    }
+
+    // Validate destination URL (HTTPS only)
+    const urlValidation = validateDestinationUrl(destinationUrl);
+    if (!urlValidation.valid) {
+      return jsonResponse({ error: urlValidation.error }, 400);
     }
 
     // Check if short code already exists
@@ -820,9 +1015,15 @@ async function createLink(request, env) {
 async function updateLink(request, env, linkId) {
   try {
     const { shortCode, destinationUrl } = await request.json();
-    
+
     if (!shortCode || !destinationUrl) {
       return jsonResponse({ error: 'Short code and destination URL are required' }, 400);
+    }
+
+    // Validate destination URL (HTTPS only)
+    const urlValidation = validateDestinationUrl(destinationUrl);
+    if (!urlValidation.valid) {
+      return jsonResponse({ error: urlValidation.error }, 400);
     }
 
     // Check if short code exists for another link
