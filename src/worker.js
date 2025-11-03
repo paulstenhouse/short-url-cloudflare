@@ -31,11 +31,27 @@ export default {
 
     // Link analytics page - /analytics/shortcode?key=adminkey
     if (path.startsWith('/analytics/')) {
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+
+      // Check rate limit
+      const rateLimitCheck = await checkRateLimit(env, ip);
+      if (rateLimitCheck.blocked) {
+        return new Response(
+          `Too many failed attempts. Please try again in ${Math.ceil(rateLimitCheck.retryAfter / 60)} minutes.`,
+          { status: 429 }
+        );
+      }
+
       const shortCode = path.split('/')[2];
       const adminKey = url.searchParams.get('key');
+
       if (adminKey === env.ADMIN_KEY && shortCode) {
+        await clearRateLimit(env, ip);
         return serveLinkAnalytics(shortCode, env);
       }
+
+      // Record failed attempt
+      await recordFailedAttempt(env, ip);
       return new Response('Unauthorized', { status: 401 });
     }
 
@@ -690,14 +706,172 @@ async function serveLinkAnalytics(shortCode, env) {
   }
 }
 
+// Rate limiting functions
+async function checkRateLimit(env, ip) {
+  try {
+    const maxAttempts = parseInt(env.RATE_LIMIT_MAX_ATTEMPTS || '10');
+    const windowMinutes = parseInt(env.RATE_LIMIT_WINDOW_MINUTES || '15');
+    const blockDurationMinutes = parseInt(env.RATE_LIMIT_BLOCK_DURATION_MINUTES || '60');
+
+    // Get rate limit record for this IP
+    const record = await env.GO_LINKS.prepare(
+      'SELECT * FROM rate_limit WHERE ip_address = ?1'
+    ).bind(ip).first();
+
+    if (!record) {
+      return { blocked: false };
+    }
+
+    const now = new Date();
+
+    // Check if IP is currently blocked
+    if (record.blocked_until) {
+      const blockedUntil = new Date(record.blocked_until);
+      if (now < blockedUntil) {
+        const retryAfter = Math.ceil((blockedUntil - now) / 1000); // seconds
+        const minutesLeft = Math.ceil(retryAfter / 60);
+        return {
+          blocked: true,
+          retryAfter,
+          message: `Too many failed authentication attempts from IP ${ip}. Blocked for ${minutesLeft} more minute(s). Please try again at ${blockedUntil.toISOString()}.`
+        };
+      }
+    }
+
+    // Check if we're within the rate limit window
+    const firstAttempt = new Date(record.first_attempt_at);
+    const windowEnd = new Date(firstAttempt.getTime() + windowMinutes * 60 * 1000);
+
+    // If window has expired, allow the request (will be reset on next attempt)
+    if (now > windowEnd) {
+      return { blocked: false };
+    }
+
+    // Check if exceeded max attempts within window
+    if (record.failed_attempts >= maxAttempts) {
+      // Block the IP
+      const blockUntil = new Date(now.getTime() + blockDurationMinutes * 60 * 1000);
+      await env.GO_LINKS.prepare(
+        'UPDATE rate_limit SET blocked_until = ?1 WHERE ip_address = ?2'
+      ).bind(blockUntil.toISOString(), ip).run();
+
+      const retryAfter = blockDurationMinutes * 60;
+      return {
+        blocked: true,
+        retryAfter,
+        message: `Rate limit exceeded: ${record.failed_attempts} failed attempts within ${windowMinutes} minutes. IP ${ip} is now blocked for ${blockDurationMinutes} minutes. Try again at ${blockUntil.toISOString()}.`
+      };
+    }
+
+    return { blocked: false };
+  } catch (error) {
+    console.error('Rate limit check failed:', error.message, 'IP:', ip);
+    // Fail open - allow request if rate limiting fails
+    return { blocked: false };
+  }
+}
+
+async function recordFailedAttempt(env, ip) {
+  try {
+    const windowMinutes = parseInt(env.RATE_LIMIT_WINDOW_MINUTES || '15');
+    const maxAttempts = parseInt(env.RATE_LIMIT_MAX_ATTEMPTS || '10');
+    const now = new Date().toISOString();
+
+    // Get existing record
+    const record = await env.GO_LINKS.prepare(
+      'SELECT * FROM rate_limit WHERE ip_address = ?1'
+    ).bind(ip).first();
+
+    if (!record) {
+      // Create new record
+      await env.GO_LINKS.prepare(`
+        INSERT INTO rate_limit (ip_address, failed_attempts, first_attempt_at, last_attempt_at)
+        VALUES (?1, 1, ?2, ?2)
+      `).bind(ip, now).run();
+      console.warn(`[AUTH] Failed attempt 1/${maxAttempts} from IP ${ip}`);
+    } else {
+      const firstAttempt = new Date(record.first_attempt_at);
+      const windowEnd = new Date(firstAttempt.getTime() + windowMinutes * 60 * 1000);
+      const currentTime = new Date();
+
+      if (currentTime > windowEnd) {
+        // Window expired, reset the counter
+        await env.GO_LINKS.prepare(`
+          UPDATE rate_limit
+          SET failed_attempts = 1, first_attempt_at = ?1, last_attempt_at = ?1, blocked_until = NULL
+          WHERE ip_address = ?2
+        `).bind(now, ip).run();
+        console.warn(`[AUTH] Failed attempt 1/${maxAttempts} from IP ${ip} (window reset)`);
+      } else {
+        // Increment counter within window
+        const newAttempts = record.failed_attempts + 1;
+        await env.GO_LINKS.prepare(`
+          UPDATE rate_limit
+          SET failed_attempts = failed_attempts + 1, last_attempt_at = ?1
+          WHERE ip_address = ?2
+        `).bind(now, ip).run();
+        console.warn(`[AUTH] Failed attempt ${newAttempts}/${maxAttempts} from IP ${ip}${newAttempts >= maxAttempts ? ' - RATE LIMIT TRIGGERED' : ''}`);
+      }
+    }
+  } catch (error) {
+    console.error('[RATE_LIMIT] Failed to record attempt:', error.message, 'IP:', ip, 'Stack:', error.stack);
+    // Don't throw - rate limiting failure shouldn't break auth
+  }
+}
+
+async function clearRateLimit(env, ip) {
+  try {
+    // Clear rate limit record on successful authentication
+    const result = await env.GO_LINKS.prepare(
+      'DELETE FROM rate_limit WHERE ip_address = ?1'
+    ).bind(ip).run();
+    if (result.meta.changes > 0) {
+      console.log(`[AUTH] Successful login from IP ${ip} - rate limit cleared`);
+    }
+  } catch (error) {
+    console.error('[RATE_LIMIT] Failed to clear rate limit:', error.message, 'IP:', ip);
+    // Don't throw - this is a cleanup operation
+  }
+}
+
 async function handleAdminAPI(request, env, url) {
-  const adminKey = url.searchParams.get('key');
-  
-  if (!adminKey || adminKey !== env.ADMIN_KEY) {
-    return jsonResponse({ error: 'Unauthorized' }, 401);
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  const path = url.pathname;
+
+  // Check if IP is rate limited
+  const rateLimitCheck = await checkRateLimit(env, ip);
+  if (rateLimitCheck.blocked) {
+    return jsonResponse({
+      error: rateLimitCheck.message || 'Too many failed attempts. Please try again later.',
+      errorCode: 'RATE_LIMIT_EXCEEDED',
+      retryAfter: rateLimitCheck.retryAfter,
+      hint: 'Wait for the block period to expire, or contact an administrator to manually unblock your IP.'
+    }, 429);
   }
 
-  const path = url.pathname;
+  const adminKey = url.searchParams.get('key');
+
+  if (!adminKey) {
+    return jsonResponse({
+      error: 'Authentication required: Missing admin key',
+      errorCode: 'MISSING_ADMIN_KEY',
+      hint: 'Add ?key=YOUR_ADMIN_KEY to the URL or use the Authorization header.'
+    }, 401);
+  }
+
+  if (adminKey !== env.ADMIN_KEY) {
+    // Record failed authentication attempt
+    await recordFailedAttempt(env, ip);
+    return jsonResponse({
+      error: 'Authentication failed: Invalid admin key',
+      errorCode: 'INVALID_ADMIN_KEY',
+      hint: 'Check that your admin key is correct. Keys are case-sensitive.'
+    }, 401);
+  }
+
+  // Successful authentication - clear rate limit
+  await clearRateLimit(env, ip);
+
   const method = request.method;
 
   if (path === '/api/admin/links') {
@@ -728,7 +902,13 @@ async function handleAdminAPI(request, env, url) {
     return getAnalytics(request, env, url);
   }
 
-  return jsonResponse({ error: 'Not found' }, 404);
+  return jsonResponse({
+    error: 'Endpoint not found',
+    errorCode: 'ENDPOINT_NOT_FOUND',
+    path: path,
+    method: method,
+    hint: 'Valid endpoints: GET /api/admin/links, POST /api/admin/links, PUT /api/admin/links/:id, DELETE /api/admin/links/:id, POST /api/admin/links/:id/reset, GET /api/admin/analytics'
+  }, 404);
 }
 
 async function getLinks(request, env, url) {
@@ -780,16 +960,95 @@ async function getLinks(request, env, url) {
       }
     });
   } catch (error) {
-    return jsonResponse({ error: 'Failed to fetch links' }, 500);
+    console.error('[API] Failed to fetch links:', error.message, 'Stack:', error.stack);
+    return jsonResponse({
+      error: 'Database error: Failed to fetch links',
+      errorCode: 'DB_QUERY_FAILED',
+      details: error.message,
+      hint: 'Check that the database is accessible and the links table exists.'
+    }, 500);
+  }
+}
+
+function validateDestinationUrl(url) {
+  try {
+    const parsed = new URL(url);
+
+    // Only allow HTTPS protocol (not HTTP, javascript:, file:, data:, etc.)
+    if (parsed.protocol !== 'https:') {
+      return {
+        valid: false,
+        error: `Security: Only HTTPS URLs are allowed. Got protocol: ${parsed.protocol}`,
+        errorCode: 'INSECURE_PROTOCOL',
+        hint: 'Change the URL to use HTTPS (https://) instead of ' + parsed.protocol
+      };
+    }
+
+    // Additional validation: Check for valid hostname
+    if (!parsed.hostname || parsed.hostname.length === 0) {
+      return {
+        valid: false,
+        error: 'Invalid URL: Missing hostname',
+        errorCode: 'MISSING_HOSTNAME',
+        hint: 'URL must include a domain name (e.g., https://example.com/path)'
+      };
+    }
+
+    // Reject localhost and private IP ranges for security
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname.startsWith('192.168.') ||
+      hostname.startsWith('10.') ||
+      hostname.startsWith('172.16.') ||
+      hostname.startsWith('169.254.') ||
+      hostname === '[::1]'
+    ) {
+      return {
+        valid: false,
+        error: `Security: URLs pointing to localhost or private networks are not allowed (${hostname})`,
+        errorCode: 'PRIVATE_NETWORK_BLOCKED',
+        hint: 'Use a public HTTPS URL instead of localhost or private IP addresses.'
+      };
+    }
+
+    return { valid: true };
+  } catch (error) {
+    return {
+      valid: false,
+      error: `Invalid URL format: ${error.message}`,
+      errorCode: 'MALFORMED_URL',
+      hint: 'Ensure the URL is properly formatted (e.g., https://example.com/page)'
+    };
   }
 }
 
 async function createLink(request, env) {
   try {
     const { shortCode, destinationUrl, notes } = await request.json();
-    
+
     if (!shortCode || !destinationUrl) {
-      return jsonResponse({ error: 'Short code and destination URL are required' }, 400);
+      return jsonResponse({
+        error: 'Missing required fields',
+        errorCode: 'MISSING_FIELDS',
+        missing: [
+          !shortCode ? 'shortCode' : null,
+          !destinationUrl ? 'destinationUrl' : null
+        ].filter(Boolean),
+        hint: 'Request body must include both "shortCode" and "destinationUrl" fields.'
+      }, 400);
+    }
+
+    // Validate destination URL (HTTPS only)
+    const urlValidation = validateDestinationUrl(destinationUrl);
+    if (!urlValidation.valid) {
+      return jsonResponse({
+        error: urlValidation.error,
+        errorCode: urlValidation.errorCode,
+        hint: urlValidation.hint,
+        providedUrl: destinationUrl
+      }, 400);
     }
 
     // Check if short code already exists
@@ -798,31 +1057,65 @@ async function createLink(request, env) {
       .first();
 
     if (existing) {
-      return jsonResponse({ error: 'Short code already exists' }, 409);
+      return jsonResponse({
+        error: `Conflict: Short code "${shortCode}" already exists`,
+        errorCode: 'SHORTCODE_ALREADY_EXISTS',
+        conflictingShortCode: shortCode,
+        existingLinkId: existing.id,
+        hint: 'Choose a different short code or update the existing link instead.'
+      }, 409);
     }
 
     const result = await env.GO_LINKS.prepare(
       'INSERT INTO links (short_code, destination_url, notes) VALUES (?1, ?2, ?3)'
     ).bind(shortCode, destinationUrl, notes || null).run();
 
-    return jsonResponse({ 
-      id: result.meta.last_row_id, 
-      shortCode, 
+    console.log(`[API] Created link: ${shortCode} -> ${destinationUrl} (ID: ${result.meta.last_row_id})`);
+
+    return jsonResponse({
+      id: result.meta.last_row_id,
+      shortCode,
       destinationUrl,
       notes,
-      message: 'Link created successfully' 
+      message: 'Link created successfully',
+      url: `/${shortCode}`
     });
   } catch (error) {
-    return jsonResponse({ error: 'Failed to create link' }, 500);
+    console.error('[API] Failed to create link:', error.message, 'Stack:', error.stack);
+    return jsonResponse({
+      error: 'Database error: Failed to create link',
+      errorCode: 'DB_INSERT_FAILED',
+      details: error.message,
+      hint: 'Check that the database is accessible and the links table exists.'
+    }, 500);
   }
 }
 
 async function updateLink(request, env, linkId) {
   try {
     const { shortCode, destinationUrl } = await request.json();
-    
+
     if (!shortCode || !destinationUrl) {
-      return jsonResponse({ error: 'Short code and destination URL are required' }, 400);
+      return jsonResponse({
+        error: 'Missing required fields',
+        errorCode: 'MISSING_FIELDS',
+        missing: [
+          !shortCode ? 'shortCode' : null,
+          !destinationUrl ? 'destinationUrl' : null
+        ].filter(Boolean),
+        hint: 'Request body must include both "shortCode" and "destinationUrl" fields.'
+      }, 400);
+    }
+
+    // Validate destination URL (HTTPS only)
+    const urlValidation = validateDestinationUrl(destinationUrl);
+    if (!urlValidation.valid) {
+      return jsonResponse({
+        error: urlValidation.error,
+        errorCode: urlValidation.errorCode,
+        hint: urlValidation.hint,
+        providedUrl: destinationUrl
+      }, 400);
     }
 
     // Check if short code exists for another link
@@ -831,43 +1124,117 @@ async function updateLink(request, env, linkId) {
     ).bind(shortCode, linkId).first();
 
     if (existing) {
-      return jsonResponse({ error: 'Short code already exists' }, 409);
+      return jsonResponse({
+        error: `Conflict: Short code "${shortCode}" is already used by another link`,
+        errorCode: 'SHORTCODE_ALREADY_EXISTS',
+        conflictingShortCode: shortCode,
+        existingLinkId: existing.id,
+        currentLinkId: parseInt(linkId),
+        hint: 'Choose a different short code for this link.'
+      }, 409);
     }
 
-    await env.GO_LINKS.prepare(
+    const result = await env.GO_LINKS.prepare(
       'UPDATE links SET short_code = ?1, destination_url = ?2 WHERE id = ?3'
     ).bind(shortCode, destinationUrl, linkId).run();
 
-    return jsonResponse({ message: 'Link updated successfully' });
+    if (result.meta.changes === 0) {
+      return jsonResponse({
+        error: `Link not found: No link exists with ID ${linkId}`,
+        errorCode: 'LINK_NOT_FOUND',
+        linkId: parseInt(linkId),
+        hint: 'Check that the link ID is correct. The link may have been deleted.'
+      }, 404);
+    }
+
+    console.log(`[API] Updated link ID ${linkId}: ${shortCode} -> ${destinationUrl}`);
+
+    return jsonResponse({
+      message: 'Link updated successfully',
+      id: parseInt(linkId),
+      shortCode,
+      destinationUrl
+    });
   } catch (error) {
-    return jsonResponse({ error: 'Failed to update link' }, 500);
+    console.error('[API] Failed to update link:', error.message, 'LinkID:', linkId, 'Stack:', error.stack);
+    return jsonResponse({
+      error: 'Database error: Failed to update link',
+      errorCode: 'DB_UPDATE_FAILED',
+      details: error.message,
+      linkId: parseInt(linkId),
+      hint: 'Check that the database is accessible and the link exists.'
+    }, 500);
   }
 }
 
 async function deleteLink(env, linkId) {
   try {
-    await env.GO_LINKS.prepare('DELETE FROM links WHERE id = ?1').bind(linkId).run();
-    return jsonResponse({ message: 'Link deleted successfully' });
+    const result = await env.GO_LINKS.prepare('DELETE FROM links WHERE id = ?1').bind(linkId).run();
+
+    if (result.meta.changes === 0) {
+      return jsonResponse({
+        error: `Link not found: No link exists with ID ${linkId}`,
+        errorCode: 'LINK_NOT_FOUND',
+        linkId: parseInt(linkId),
+        hint: 'Check that the link ID is correct. The link may already be deleted.'
+      }, 404);
+    }
+
+    console.log(`[API] Deleted link ID ${linkId}`);
+
+    return jsonResponse({
+      message: 'Link deleted successfully',
+      id: parseInt(linkId)
+    });
   } catch (error) {
-    return jsonResponse({ error: 'Failed to delete link' }, 500);
+    console.error('[API] Failed to delete link:', error.message, 'LinkID:', linkId, 'Stack:', error.stack);
+    return jsonResponse({
+      error: 'Database error: Failed to delete link',
+      errorCode: 'DB_DELETE_FAILED',
+      details: error.message,
+      linkId: parseInt(linkId),
+      hint: 'Check that the database is accessible.'
+    }, 500);
   }
 }
 
 async function resetLinkStats(env, linkId) {
   try {
     // Reset click count and last clicked in links table
-    await env.GO_LINKS.prepare(
+    const linkResult = await env.GO_LINKS.prepare(
       'UPDATE links SET click_count = 0, last_clicked = NULL WHERE id = ?1'
     ).bind(linkId).run();
-    
+
+    if (linkResult.meta.changes === 0) {
+      return jsonResponse({
+        error: `Link not found: No link exists with ID ${linkId}`,
+        errorCode: 'LINK_NOT_FOUND',
+        linkId: parseInt(linkId),
+        hint: 'Check that the link ID is correct. The link may have been deleted.'
+      }, 404);
+    }
+
     // Delete all analytics records for this link
-    await env.GO_LINKS.prepare(
+    const analyticsResult = await env.GO_LINKS.prepare(
       'DELETE FROM analytics WHERE link_id = ?1'
     ).bind(linkId).run();
 
-    return jsonResponse({ message: 'Link statistics reset successfully' });
+    console.log(`[API] Reset stats for link ID ${linkId}: ${analyticsResult.meta.changes} analytics records deleted`);
+
+    return jsonResponse({
+      message: 'Link statistics reset successfully',
+      id: parseInt(linkId),
+      analyticsRecordsDeleted: analyticsResult.meta.changes
+    });
   } catch (error) {
-    return jsonResponse({ error: 'Failed to reset link statistics' }, 500);
+    console.error('[API] Failed to reset link stats:', error.message, 'LinkID:', linkId, 'Stack:', error.stack);
+    return jsonResponse({
+      error: 'Database error: Failed to reset link statistics',
+      errorCode: 'DB_RESET_FAILED',
+      details: error.message,
+      linkId: parseInt(linkId),
+      hint: 'Check that the database is accessible and the link exists.'
+    }, 500);
   }
 }
 
@@ -946,10 +1313,22 @@ async function getAnalytics(request, env, url) {
         limit,
         total: countResult.total,
         pages: Math.ceil(countResult.total / limit)
+      },
+      filters: {
+        linkId: linkId || null,
+        country: country || null,
+        dateFrom: dateFrom || null,
+        dateTo: dateTo || null
       }
     });
   } catch (error) {
-    return jsonResponse({ error: 'Failed to fetch analytics' }, 500);
+    console.error('[API] Failed to fetch analytics:', error.message, 'Stack:', error.stack);
+    return jsonResponse({
+      error: 'Database error: Failed to fetch analytics',
+      errorCode: 'DB_QUERY_FAILED',
+      details: error.message,
+      hint: 'Check that the database is accessible and the analytics table exists.'
+    }, 500);
   }
 }
 
@@ -967,7 +1346,14 @@ async function handleRedirect(request, env, url) {
     ).bind(shortCode).first();
 
     if (!link) {
-      return new Response('Not Found', { status: 404 });
+      console.warn(`[REDIRECT] Short code not found: ${shortCode}`);
+      return new Response(
+        `Short link not found: /${shortCode}\n\nThis short link does not exist. Please check the URL and try again.`,
+        {
+          status: 404,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+        }
+      );
     }
 
     // Track analytics and increment click count
@@ -981,10 +1367,19 @@ async function handleRedirect(request, env, url) {
     // Only append query params if destination URL doesn't already have any
     const hasDestinationParams = link.destination_url.includes('?');
     const finalUrl = hasDestinationParams ? link.destination_url : link.destination_url + url.search;
-    
+
+    console.log(`[REDIRECT] ${shortCode} -> ${link.destination_url} (click #${link.click_count + 1})`);
+
     return Response.redirect(finalUrl, 301);
   } catch (error) {
-    return new Response('Internal Server Error', { status: 500 });
+    console.error('[REDIRECT] Error processing redirect:', error.message, 'ShortCode:', shortCode, 'Stack:', error.stack);
+    return new Response(
+      `Service Error\n\nAn error occurred while processing your request. Please try again later.\n\nError Code: REDIRECT_FAILED`,
+      {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+      }
+    );
   }
 }
 
