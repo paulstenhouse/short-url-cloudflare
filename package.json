@@ -11,7 +11,8 @@
     "deploy": "npm run build && wrangler pages deploy dist",
     "wrangler": "wrangler",
     "db:migrate": "wrangler d1 migrations apply go",
-    "db:create": "wrangler d1 create go"
+    "db:create": "wrangler d1 create go",
+    "setup": "node bin/setup.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",

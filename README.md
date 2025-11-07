@@ -30,17 +30,55 @@ A Cloudflare-powered short URL service with D1 database, analytics tracking, and
 
 ## Installation & Setup
 
-### Prerequisites
+### 🚀 One-Command Setup (Recommended)
+
+Get your short URL service deployed in minutes with our interactive CLI! No manual configuration needed.
+
+```bash
+# Clone and navigate to the project
+git clone [your-repo-url]
+cd go
+
+# Install dependencies
+npm install
+
+# Run the automated setup CLI
+npm run setup
+```
+
+**Prerequisites:** Node.js 18+ and a Cloudflare account (the CLI will handle authentication)
+
+**What the CLI does for you:**
+- ✅ Install Wrangler CLI if needed
+- ✅ Handle Cloudflare authentication 
+- ✅ Create D1 database automatically
+- ✅ Deploy and configure your Worker
+- ✅ Generate secure admin key
+- ✅ Apply database migrations
+- ✅ Deploy to Cloudflare Workers
+- ✅ Generate complete setup documentation
+
+**After completion, you'll have:**
+- 🌐 Your service live at `https://your-worker.workers.dev`
+- 🔐 Admin panel with secure key
+- 📄 Complete documentation in `SETUP_COMPLETE.md`
+- 🚀 Ready to create short links immediately!
+
+### 🛠 Manual Setup
+
+For advanced users who want full control over the setup process.
+
+**Prerequisites:**
 - Node.js 18+ and npm
 - Cloudflare account
 - Wrangler CLI (installed via npm)
 
-### 1. Install Dependencies
+#### 1. Install Dependencies
 ```bash
 npm install
 ```
 
-### 2. Set Up Cloudflare D1 Database
+#### 2. Set Up Cloudflare D1 Database
 ```bash
 # Create a new D1 database
 npm run db:create
@@ -49,13 +87,13 @@ npm run db:create
 npm run db:migrate
 ```
 
-### 3. Configure Environment
+#### 3. Configure Environment
 Update `wrangler.toml` with your settings:
 - Update `database_id` with your actual D1 database ID from step 2
 - Change `ADMIN_KEY` to a secure key for production
 - Update `DEFAULT_REDIRECT` to your preferred default URL
 
-### 4. Local Development
+#### 4. Local Development
 ```bash
 # Start development server with D1 local database
 npm run dev
@@ -67,7 +105,7 @@ npm run lint
 npm run build
 ```
 
-### 5. Deploy to Cloudflare
+#### 5. Deploy to Cloudflare
 ```bash
 # Deploy to Cloudflare Pages + Workers
 npm run deploy
