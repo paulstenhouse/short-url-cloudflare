@@ -1,32 +1,6 @@
 # Short URL Service with Admin Panel
 
-A Cloudflare-powered short URL service with D1 database, analytics tracking, and a React admin panel.
-
-**Perfect for self-hosting** - Deploy your own private short URL service without the complexity of traditional cloud infrastructure. No VPCs, no server management, no hidden costs - just click deploy and you're live globally!
-
-## 🚀 One-Click Deploy
-
-Skip the setup entirely! Deploy this complete short URL service in seconds:
-
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/paulstenhouse/short-url-cloudflare)
-
-### What happens when you click Deploy:
-
-✅ **Auto-Clone Repository** - Creates a new repo on your GitHub/GitLab account  
-✅ **Provision D1 Database** - Automatically creates and configures the database  
-✅ **Deploy Worker** - Builds and deploys your short URL service globally  
-✅ **Setup CI/CD** - Every push to main automatically deploys via Workers Builds  
-✅ **Preview URLs** - Pull requests get preview deployments for testing  
-
-**No manual setup required!** No need to install Wrangler, create databases, or configure deployments.
-
-### After Deployment:
-- **Your Service:** `https://go.[your-account].workers.dev`
-- **Admin Panel:** `https://go.[your-account].workers.dev/admin?key=demo-admin-key-12345`
-
-> **Customize After Deployment:**
-> - Change `ADMIN_KEY` to a secure key for production use
-> - Update `DEFAULT_REDIRECT` to set where the base URL redirects (e.g., your company homepage)
+A Cloudflare-powered short URL service with D1 database, analytics tracking, and a React admin panel. Built for self-hosting with serverless infrastructure.
 
 ## Features
 
@@ -54,53 +28,54 @@ Skip the setup entirely! Deploy this complete short URL service in seconds:
 └── wrangler.toml          # Cloudflare configuration
 ```
 
-## Manual Setup (Local Development Only)
+## Installation & Setup
 
-> **💡 For production deployment, use the [One-Click Deploy](#-one-click-deploy) button above instead!**
-
-The manual setup is only needed if you want to develop locally or customize the code:
+### Prerequisites
+- Node.js 18+ and npm
+- Cloudflare account
+- Wrangler CLI (installed via npm)
 
 ### 1. Install Dependencies
 ```bash
 npm install
 ```
 
-### 2. Configure Cloudflare
+### 2. Set Up Cloudflare D1 Database
 ```bash
-# Create a D1 database
+# Create a new D1 database
 npm run db:create
 
-# Apply migrations
+# Apply database migrations
 npm run db:migrate
-
-# Update wrangler.toml with your database ID and secure admin key
 ```
 
-### 3. Local Development
+### 3. Configure Environment
+Update `wrangler.toml` with your settings:
+- Update `database_id` with your actual D1 database ID from step 2
+- Change `ADMIN_KEY` to a secure key for production
+- Update `DEFAULT_REDIRECT` to your preferred default URL
+
+### 4. Local Development
 ```bash
-# Start development server
+# Start development server with D1 local database
 npm run dev
 
-# Deploy when ready
-wrangler deploy
+# Run linting
+npm run lint
+
+# Build for production
+npm run build
 ```
 
-### vs. Traditional Cloud Setup
+### 5. Deploy to Cloudflare
+```bash
+# Deploy to Cloudflare Pages + Workers
+npm run deploy
+```
 
-**Traditional Cloud Provider:**
-- Setup VPC and networking
-- Install and configure tools
-- Provision and secure databases  
-- Configure CI/CD pipelines
-- Manage scaling and servers
-- Handle security updates
-
-**Cloudflare Deploy Button:**
-- ✅ Click button → Everything deployed
-- ✅ Serverless and globally distributed
-- ✅ Auto-scaling with pay-per-use pricing
-- ✅ Built-in CI/CD and security updates
-- ✅ No infrastructure management needed
+After deployment, your service will be available at:
+- **Your Service:** `https://go.[your-account].workers.dev`
+- **Admin Panel:** `https://go.[your-account].workers.dev/admin?key=your-admin-key`
 
 ## Usage
 
@@ -166,13 +141,12 @@ DEFAULT_REDIRECT = "https://your-site.com" # Where the base URL redirects to
 
 ## Database Setup
 
-### Database Migration
-
-Apply the database schema with a single migration:
+The application uses Cloudflare D1 (SQLite) as its database. Apply the schema using Wrangler:
 
 ```bash
-# Apply the complete schema
-npx wrangler d1 migrations apply go --remote
+# Apply the complete schema to your D1 database
+npm run db:migrate
+# or manually: wrangler d1 migrations apply go
 ```
 
 This runs `migrations/000_initial_schema.sql` which creates all tables, indexes, and constraints in one step.
@@ -202,16 +176,22 @@ The complete schema includes:
 ## Development
 
 ```bash
-# Start development server
+# Start development server with local D1 database
 npm run dev
 
 # Build for production
 npm run build
 
-# Deploy to Cloudflare Pages
+# Deploy to Cloudflare Pages + Workers
 npm run deploy
 
-# Access Wrangler CLI
+# Run linting
+npm run lint
+
+# Preview production build locally
+npm run preview
+
+# Access Wrangler CLI directly
 npm run wrangler [command]
 ```
 
