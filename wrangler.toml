@@ -1,21 +1,29 @@
-name = "go-3"
+name = "cloudflare-shorturl-demo"
 main = "src/worker.js"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Custom domain configuration
+[[routes]]
+pattern = "short-url-demo.kardoe.com"
+custom_domain = true
+
 # Database configuration
 [[d1_databases]]
 binding = "GO_LINKS"
-database_name = "go-3"
-database_id = "913fbffb-d4d8-4724-a300-f3b4e3c607c0"
+database_name = "cloudflare-shorturl-demo"
+database_id = "7000ee3e-650c-4ea6-96bc-fc3e94f9ed80"
 
 # Environment variables
 [vars]
-ADMIN_KEY = "yj-icm8-tksi"
-DEFAULT_REDIRECT = "https://stenhouse.org"
+# Demo Configuration
+DEMO_MODE = "true"
+DEMO_DATA_RETENTION_HOURS = "1"      # Clear data older than 1 hour
+ADMIN_KEY = "secure-admin-key"       # Public demo key
+DEFAULT_REDIRECT = "https://github.com/paulstenhouse/short-url-cloudflare"
 DEFAULT_TIMEZONE = "America/New_York"
 
-# Rate limiting configuration
-RATE_LIMIT_MAX_ATTEMPTS = "10"        # Max failed auth attempts per window
+# Rate limiting configuration (more lenient for demo)
+RATE_LIMIT_MAX_ATTEMPTS = "20"       # Max failed auth attempts per window
 RATE_LIMIT_WINDOW_MINUTES = "15"     # Time window in minutes
-RATE_LIMIT_BLOCK_DURATION_MINUTES = "60"  # How long to block after exceeding limit
+RATE_LIMIT_BLOCK_DURATION_MINUTES = "30"  # How long to block after exceeding limit
