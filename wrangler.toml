@@ -20,7 +20,7 @@ database_id = "7000ee3e-650c-4ea6-96bc-fc3e94f9ed80"
 DEMO_MODE = "true"
 DEMO_DATA_RETENTION_HOURS = "1"      # Clear data older than 1 hour
 ADMIN_KEY = "secure-admin-key"       # Public demo key
-DEFAULT_REDIRECT = "https://github.com/paulstenhouse/short-url-cloudflare"
+DEFAULT_REDIRECT = "https://short-url-demo.kardoe.com/admin"
 DEFAULT_TIMEZONE = "America/New_York"
 
 # Rate limiting configuration (more lenient for demo)
